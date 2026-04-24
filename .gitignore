@@ -1,0 +1,54 @@
+## .NET
+bin/
+obj/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+*.userprefs
+.vs/
+project.lock.json
+*.nuget.props
+*.nuget.targets
+packages/
+*.nupkg
+
+## Build results
+[Dd]ebug/
+[Rr]elease/
+x64/
+x86/
+bld/
+[Bb]in/
+[Oo]bj/
+[Ll]og/
+[Ll]ogs/
+
+## IDE
+.idea/
+*.swp
+*.swo
+*~
+.vscode/
+
+## OS
+.DS_Store
+**/.DS_Store
+Thumbs.db
+
+## Node
+node_modules/
+
+## Docker volumes
+docker-data/
+
+## Environment / secrets
+.env
+.env.*
+!.env.example
+
+## Frontend build output
+src/Frontend/dist/
+
+## Load test results
+tests/LoadTests/results/

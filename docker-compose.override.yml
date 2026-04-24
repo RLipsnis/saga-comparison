@@ -1,0 +1,10 @@
+version: "3.8"
+
+services:
+  prometheus:
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  grafana:
+    extra_hosts:
+      - "host.docker.internal:host-gateway"

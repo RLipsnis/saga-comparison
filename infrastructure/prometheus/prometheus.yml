@@ -1,0 +1,36 @@
+global:
+  scrape_interval: 5s
+  evaluation_interval: 5s
+
+scrape_configs:
+  # --- Container resource metrics (CPU, RAM, IO) via cAdvisor ---
+  - job_name: 'cadvisor'
+    scrape_interval: 5s
+    static_configs:
+      - targets: ['cadvisor:8080']
+
+  # --- .NET service application metrics ---
+  - job_name: 'order-service'
+    metrics_path: /metrics
+    static_configs:
+      - targets: ['host.docker.internal:5010']
+
+  - job_name: 'inventory-service'
+    metrics_path: /metrics
+    static_configs:
+      - targets: ['host.docker.internal:5011']
+
+  - job_name: 'payment-service'
+    metrics_path: /metrics
+    static_configs:
+      - targets: ['host.docker.internal:5012']
+
+  - job_name: 'shipping-service'
+    metrics_path: /metrics
+    static_configs:
+      - targets: ['host.docker.internal:5013']
+
+  - job_name: 'notification-service'
+    metrics_path: /metrics
+    static_configs:
+      - targets: ['host.docker.internal:5014']

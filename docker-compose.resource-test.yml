@@ -1,0 +1,46 @@
+# Resource-constrained profiles for scaling experiments.
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.resource-test.yml up -d
+#
+# This file applies CPU/memory limits to Temporal and RabbitMQ containers.
+# Run load tests at each profile, then compare results to show how
+# resource constraints affect orchestration vs choreography performance.
+#
+# Adjust the limits below per experiment. Suggested test matrix:
+#
+#   Profile     | Temporal CPU | Temporal RAM | RabbitMQ CPU | RabbitMQ RAM
+#   ------------|-------------|-------------|-------------|-------------
+#   Constrained | 0.5 cores   | 256MB       | 0.5 cores   | 256MB
+#   Default     | 1.0 cores   | 512MB       | 1.0 cores   | 512MB
+#   Generous    | 2.0 cores   | 1024MB      | 2.0 cores   | 1024MB
+#   Unlimited   | (no limits) | (no limits) | (no limits) | (no limits)
+
+version: "3.8"
+
+services:
+  temporal:
+    deploy:
+      resources:
+        limits:
+          cpus: "${TEMPORAL_CPUS:-1.0}"
+          memory: "${TEMPORAL_MEMORY:-512M}"
+        reservations:
+          cpus: "0.25"
+          memory: 128M
+
+  rabbitmq:
+    deploy:
+      resources:
+        limits:
+          cpus: "${RABBITMQ_CPUS:-1.0}"
+          memory: "${RABBITMQ_MEMORY:-512M}"
+        reservations:
+          cpus: "0.25"
+          memory: 128M
+
+  postgres:
+    deploy:
+      resources:
+        limits:
+          cpus: "${POSTGRES_CPUS:-1.0}"
+          memory: "${POSTGRES_MEMORY:-512M}"
