@@ -113,6 +113,20 @@ public class OrderSagaWorkflow
         {
             Workflow.Logger.LogWarning("Saga failed for OrderId={OrderId}: {Reason}. Running compensations...", command.OrderId, ex.Message);
 
+            // Mark order as Compensating so the /benchmark poller can measure compensation duration.
+            // Uses CompensationActivityOptions (1 attempt, no backoff) so a slow/failing DB doesn't
+            // inflate the observed compensation window.
+            try
+            {
+                await Workflow.ExecuteActivityAsync(
+                    (OrderActivities act) => act.UpdateOrderStatusAsync(command.OrderId, "Compensating", ex.Message),
+                    CompensationActivityOptions);
+            }
+            catch
+            {
+                Workflow.Logger.LogWarning("Failed to mark order as Compensating for OrderId={OrderId}", command.OrderId);
+            }
+
             // Run compensations in reverse order
             compensations.Reverse();
             foreach (var compensation in compensations)
@@ -127,26 +141,28 @@ public class OrderSagaWorkflow
                 }
             }
 
-            // Send failure notification (best-effort)
+            // Send failure notification (best-effort) — uses CompensationActivityOptions so a
+            // hung NotificationService can't inflate compensationDurationMs.
             try
             {
                 await Workflow.ExecuteActivityAsync(
                     (OrderActivities act) => act.SendNotificationAsync(
                         new SendNotification(command.OrderId, command.CustomerId, "OrderFailed",
                             $"Your order {command.OrderId} has failed: {ex.Message}")),
-                    DefaultActivityOptions);
+                    CompensationActivityOptions);
             }
             catch
             {
                 Workflow.Logger.LogWarning("Failed to send failure notification for OrderId={OrderId}", command.OrderId);
             }
 
-            // Update order status in DB
+            // Update order status in DB — uses CompensationActivityOptions to match the
+            // MassTransit side (which performs a single DB write via the OrderFailed consumer).
             try
             {
                 await Workflow.ExecuteActivityAsync(
                     (OrderActivities act) => act.UpdateOrderStatusAsync(command.OrderId, "Failed", ex.Message),
-                    DefaultActivityOptions);
+                    CompensationActivityOptions);
             }
             catch
             {

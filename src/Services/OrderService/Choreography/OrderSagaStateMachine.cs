@@ -3,6 +3,27 @@ using Shared.Contracts;
 
 namespace OrderService.Choreography;
 
+// Choreography saga state machine driving the Order saga.
+//
+// Sequencing notes:
+//   * Each transition calls Publish(...) before TransitionTo(...). MassTransit defers the
+//     actual broker send until the saga transaction commits, so a rollback drops the
+//     published messages together with the state change. That gives "at most once"
+//     send-with-commit semantics on the PostgreSQL saga repository.
+//   * The inverse failure mode (commit succeeds, broker publish fails) is the classic
+//     dual-write problem. Without a transactional outbox (intentionally not configured
+//     here so the broker footprint matches a vanilla RabbitMQ deployment), a failed
+//     publish after a successful commit would leak messages. Temporal does not have this
+//     issue because its history + visibility stores are written atomically by the server.
+//
+// Order.Status sequencing:
+//   * OrderCompensating is published BEFORE compensation commands (ReleaseInventory,
+//     RefundPayment) so the Order.Status column advances to "Compensating" before the
+//     rollback starts — matching the Temporal catch block's UpdateOrderStatusAsync(
+//     "Compensating", ...) call.
+//   * OrderFailed is published only from the guarded "all compensations complete" branch
+//     or the direct Initial→Failed branch, so the Order.Status is never flipped to
+//     "Failed" while compensation is still in flight.
 public class OrderSagaStateMachine : MassTransitStateMachine<OrderSagaState>
 {
     public State ReservingInventory { get; private set; } = null!;
@@ -76,6 +97,14 @@ public class OrderSagaStateMachine : MassTransitStateMachine<OrderSagaState>
                     ctx.Saga.FailureReason = ctx.Message.Reason;
                     LogTransition(ctx, "ReservingInventory", "Failed (no compensation needed)");
                 })
+                // Publish business-level failure events so the Order.Status is written by a single
+                // consumer AFTER the state machine has committed the transition. This replaces the
+                // previous design where UpdateOrderOnFailed raced the state machine on the same
+                // InventoryReservationFailed event.
+                .Publish(ctx => new OrderFailed(ctx.Saga.CorrelationId, ctx.Saga.FailureReason ?? "Unknown", DateTime.UtcNow))
+                // Failure notification (symmetric with the Temporal workflow's catch block).
+                .Publish(ctx => new SendNotification(ctx.Saga.CorrelationId, ctx.Saga.CustomerId, "OrderFailed",
+                    $"Your order {ctx.Saga.CorrelationId} has failed: {ctx.Saga.FailureReason}"))
                 .TransitionTo(Failed)
                 .Finalize()
         );
@@ -99,6 +128,10 @@ public class OrderSagaStateMachine : MassTransitStateMachine<OrderSagaState>
                     ctx.Saga.InventoryCompensated = false;
                     LogTransition(ctx, "ProcessingPayment", "Compensating (releasing inventory)");
                 })
+                // Emit OrderCompensating so the Order.Status column is advanced to "Compensating"
+                // before compensation commands start flowing. The orchestrator's catch block does
+                // the same thing via UpdateOrderStatusAsync("Compensating", ...).
+                .Publish(ctx => new OrderCompensating(ctx.Saga.CorrelationId, ctx.Saga.FailureReason ?? "Unknown", DateTime.UtcNow))
                 .Publish(ctx => new ReleaseInventory(ctx.Saga.CorrelationId,
                     System.Text.Json.JsonSerializer.Deserialize<List<OrderItemDto>>(ctx.Saga.ItemsJson)!))
                 .TransitionTo(Compensating)
@@ -128,6 +161,7 @@ public class OrderSagaStateMachine : MassTransitStateMachine<OrderSagaState>
                     ctx.Saga.PaymentCompensated = false;
                     LogTransition(ctx, "ArrangingShipping", "Compensating (refunding + releasing)");
                 })
+                .Publish(ctx => new OrderCompensating(ctx.Saga.CorrelationId, ctx.Saga.FailureReason ?? "Unknown", DateTime.UtcNow))
                 .Publish(ctx => new RefundPayment(ctx.Saga.CorrelationId, ctx.Saga.TotalAmount))
                 .Publish(ctx => new ReleaseInventory(ctx.Saga.CorrelationId,
                     System.Text.Json.JsonSerializer.Deserialize<List<OrderItemDto>>(ctx.Saga.ItemsJson)!))
@@ -157,6 +191,12 @@ public class OrderSagaStateMachine : MassTransitStateMachine<OrderSagaState>
                 })
                 .If(ctx => IsCompensationComplete(ctx.Saga), x => x
                     .Then(ctx => LogTransition(ctx, "Compensating", "Failed (all compensations done)"))
+                    // Only now (after all compensations finished) advance the Order to Failed and
+                    // send the failure notification — matching the sequencing of the Temporal
+                    // workflow's catch block.
+                    .Publish(ctx => new OrderFailed(ctx.Saga.CorrelationId, ctx.Saga.FailureReason ?? "Unknown", DateTime.UtcNow))
+                    .Publish(ctx => new SendNotification(ctx.Saga.CorrelationId, ctx.Saga.CustomerId, "OrderFailed",
+                        $"Your order {ctx.Saga.CorrelationId} has failed: {ctx.Saga.FailureReason}"))
                     .TransitionTo(Failed)
                     .Finalize()),
 
@@ -168,6 +208,9 @@ public class OrderSagaStateMachine : MassTransitStateMachine<OrderSagaState>
                 })
                 .If(ctx => IsCompensationComplete(ctx.Saga), x => x
                     .Then(ctx => LogTransition(ctx, "Compensating", "Failed (all compensations done)"))
+                    .Publish(ctx => new OrderFailed(ctx.Saga.CorrelationId, ctx.Saga.FailureReason ?? "Unknown", DateTime.UtcNow))
+                    .Publish(ctx => new SendNotification(ctx.Saga.CorrelationId, ctx.Saga.CustomerId, "OrderFailed",
+                        $"Your order {ctx.Saga.CorrelationId} has failed: {ctx.Saga.FailureReason}"))
                     .TransitionTo(Failed)
                     .Finalize()),
 

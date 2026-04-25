@@ -2,6 +2,7 @@ namespace Shared.Contracts;
 
 public record OrderCreated(Guid OrderId, Guid CustomerId, List<OrderItemDto> Items, DateTime CreatedAt);
 public record OrderCompleted(Guid OrderId, DateTime CompletedAt);
+public record OrderCompensating(Guid OrderId, string Reason, DateTime StartedAt);
 public record OrderFailed(Guid OrderId, string Reason, DateTime FailedAt);
 
 public record InventoryReserved(Guid OrderId, DateTime ReservedAt);

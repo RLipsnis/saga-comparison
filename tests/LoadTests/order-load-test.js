@@ -14,6 +14,7 @@ const orderSuccessRate = new Rate('order_success_rate');
 const RATE = __ENV.RATE ? parseInt(__ENV.RATE) : 1;           // orders per second
 const DURATION = __ENV.DURATION || '30s';                      // test duration
 const BASE_URL = __ENV.BASE_URL || 'http://localhost:5005';    // API Gateway
+const RESULT_STAMP = new Date().toISOString().replace(/[:.]/g, '-');
 
 // Products with plenty of stock for sustained load
 const PRODUCTS = [
@@ -156,6 +157,7 @@ export function handleSummary(data) {
 
   return {
     stdout: summary,
+    [`results/result_${mode}_${rate}rps_${RESULT_STAMP}.json`]: JSON.stringify(jsonResult, null, 2),
     [`results/result_${mode}_${rate}rps.json`]: JSON.stringify(jsonResult, null, 2),
   };
 }

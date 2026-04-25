@@ -51,10 +51,11 @@ else if (sagaMode == "choreography")
                 r.UsePostgres();
             });
 
+        // Single consumer per business outcome: Completed / Compensating / Failed.
+        // See UpdateOrderConsumer.cs for why this replaces the previous four-consumer design.
         x.AddConsumer<UpdateOrderOnCompleted>();
+        x.AddConsumer<UpdateOrderOnCompensating>();
         x.AddConsumer<UpdateOrderOnFailed>();
-        x.AddConsumer<UpdateOrderOnPaymentFailed>();
-        x.AddConsumer<UpdateOrderOnShippingFailed>();
 
         x.UsingRabbitMq((ctx, cfg) =>
         {
