@@ -10,21 +10,22 @@
 4. [Starting .NET Services](#4-starting-net-services)
 5. [Switching Between Orchestration and Choreography](#5-switching-between-orchestration-and-choreography)
 6. [Verifying Everything Works](#6-verifying-everything-works)
-7. [Test A: Saga Benchmark — end-to-end + per-step (P95)](#7-test-a-saga-benchmark--end-to-end--per-step-p95)
-8. [Test B: Fire-and-forget Throughput](#8-test-b-fire-and-forget-throughput)
-9. [Test C: Full Benchmark Matrix](#9-test-c-full-benchmark-matrix)
-10. [Test D: Resource Scaling (CPU / IO Bottlenecks)](#10-test-d-resource-scaling-cpu--io-bottlenecks)
-11. [Test E: Inventory-Visibility Lag](#11-test-e-inventory-visibility-lag)
-12. [Test F: Race Condition / Concurrency](#12-test-f-race-condition--concurrency)
-13. [Test G: Idempotency](#13-test-g-idempotency)
-14. [Test H: Compensation / Failure Benchmark (100% forced fail)](#14-test-h-compensation--failure-benchmark-100-forced-fail)
-15. [Test I: Mixed Workload (realistic 10% fail)](#15-test-i-mixed-workload-realistic-10-fail)
-16. [Test J: Endurance / Sustained Load](#16-test-j-endurance--sustained-load)
-17. [Test K: Concurrent-Customer Throughput](#17-test-k-concurrent-customer-throughput)
-18. [Test L: Cold-Start Penalty](#18-test-l-cold-start-penalty)
-19. [Monitoring Dashboards](#19-monitoring-dashboards)
-20. [Collecting Results for Thesis](#20-collecting-results-for-thesis)
-21. [Cleanup](#21-cleanup)
+7. [Running Tests](#7-running-tests)
+8. [Test A: Saga Benchmark — end-to-end + per-step (P95)](#8-test-a-saga-benchmark--end-to-end--per-step-p95)
+9. [Test B: Fire-and-forget Throughput](#9-test-b-fire-and-forget-throughput)
+10. [Test C: Full Benchmark Matrix](#10-test-c-full-benchmark-matrix)
+11. [Test D: Resource Scaling (CPU / IO Bottlenecks)](#11-test-d-resource-scaling-cpu--io-bottlenecks)
+12. [Test E: Inventory-Visibility Lag](#12-test-e-inventory-visibility-lag)
+13. [Test F: Race Condition / Concurrency](#13-test-f-race-condition--concurrency)
+14. [Test G: Idempotency](#14-test-g-idempotency)
+15. [Test H: Mixed Workload](#15-test-h-mixed-workload)
+16. [Test I: Compensation Correctness](#16-test-i-compensation-correctness)
+17. [Test J: Endurance / Sustained Load](#17-test-j-endurance--sustained-load)
+18. [Test K: Concurrent-Customer Throughput](#18-test-k-concurrent-customer-throughput)
+19. [Test L: Cold-Start Penalty](#19-test-l-cold-start-penalty)
+20. [Monitoring Dashboards](#20-monitoring-dashboards)
+21. [Collecting Results for Thesis](#21-collecting-results-for-thesis)
+22. [Cleanup](#22-cleanup)
 
 ---
 
@@ -247,55 +248,89 @@ This returns full timing breakdown: `apiResponseMs`, `totalSagaDurationMs`,
 
 ---
 
-## 7. Test A: Saga Benchmark — end-to-end + per-step (P95)
+## 7. Running Tests
+
+All tests are run from the `tests/LoadTests/` directory using the unified `run-test.sh` script.
+Every test automatically resets the database, prepares the state, and writes results — no manual
+setup required.
+
+```bash
+cd /Users/robertslipsnis/Desktop/Thesis/saga-comparison/tests/LoadTests
+```
+
+### Quick start
+
+```bash
+# Run a single test (mode is auto-detected from running services):
+./run-test.sh steps
+./run-test.sh race
+./run-test.sh compensation
+
+# Pass options through to k6:
+./run-test.sh steps --env RATE=25 --env DURATION=60s
+./run-test.sh concurrent --env VUS=100
+
+# Run all tests sequentially:
+./run-test.sh all
+```
+
+### Available tests
+
+| Name | Script | Purpose |
+|------|--------|---------|
+| `steps` | `benchmark-saga-steps.js` | End-to-end saga + per-step timing |
+| `load` | `order-load-test.js` | Fire-and-forget API throughput |
+| `consistency` | `benchmark-consistency-lag.js` | Inventory visibility lag |
+| `idempotency` | `benchmark-idempotency.js` | Double-click deduplication |
+| `race` | `benchmark-race-condition.js` | Concurrent orders for 1-stock product |
+| `concurrent` | `benchmark-concurrent-customers.js` | Parallel throughput (no contention) |
+| `endurance` | `benchmark-endurance.js` | Sustained load with P95 drift |
+| `mixed` | `benchmark-mixed-workload.js` | Realistic happy + compensation mix |
+| `cold-start` | `benchmark-cold-start.js` | Post-restart warm-up penalty |
+| `compensation` | `benchmark-compensation-correctness.js` | Compensation correctness verification |
+
+### What each test does automatically
+
+Every test runs a k6 `setup()` function before VUs start that:
+
+1. Resets inventory (restocks all products, clears reservations)
+2. Deletes all orders
+3. Resets payment failure rate to 0% (unless the test needs failures)
+4. Waits 2 seconds for state to settle
+
+Results are written to `tests/LoadTests/results/` with both a canonical filename (overwritten each run)
+and a timestamped copy (history preserved).
+
+---
+
+## 8. Test A: Saga Benchmark — end-to-end + per-step (P95)
 
 **Purpose:** Primary performance test. One k6 run yields headline saga percentiles **and** per-step bottleneck breakdown. This is the test you cite in the thesis.
 
-**Script:** `benchmark-saga-steps.js`
+**What it measures per sample:**
 
-**What it measures, per sample:**
+| Metric | Description |
+|--------|-------------|
+| `api_response_ms` | Time from POST to saga-initiated |
+| `total_saga_duration_ms` | Saga-initiated to terminal state |
+| `compensation_duration_ms` | Compensating → Failed window (null on success) |
+| `step_*_ms` | Per-step (reserveInventory, processPayment, arrangeShipping, sendNotification, updateStatus) |
 
-- `apiResponseMs` — time from POST to saga-initiated
-- `totalSagaDurationMs` — saga-initiated to terminal state
-- `compensationDurationMs` — Compensating→Failed window (null on success)
-- `stepDurationsMs` — per-step (reserveInventory, processPayment, arrangeShipping, sendNotification, updateStatus)
+A warmup phase (`WARMUP=5s`) runs at 1/4 rate before the main phase so the first requests don't skew P95.
 
-A short warmup phase (`WARMUP=5s` by default) runs before the main phase so the first requests don't skew P95.
-
-### Run for Orchestration
+### Steps
 
 ```bash
 cd /Users/robertslipsnis/Desktop/Thesis/saga-comparison/tests/LoadTests
 
-curl -s -X POST http://localhost:5005/api/inventory/reset > /dev/null
-curl -s -X DELETE http://localhost:5005/api/orders/reset > /dev/null
+# 1. Run for orchestration (services must be running in orchestration mode)
+./run-test.sh steps --env RATE=10 --env DURATION=60s
 
-k6 run \
-  --env MODE=orchestration \
-  --env RATE=10 \
-  --env DURATION=60s \
-  --env WARMUP=5s \
-  --env BASE_URL=http://localhost:5005 \
-  --summary-trend-stats="avg,min,med,max,p(90),p(95),p(99)" \
-  benchmark-saga-steps.js
+# 2. Switch all services to choreography mode, restart them
+
+# 3. Run for choreography
+./run-test.sh steps --env RATE=10 --env DURATION=60s
 ```
-
-### Run for Choreography
-
-```bash
-# Switch all services to choreography, restart them, then:
-curl -s -X POST http://localhost:5005/api/inventory/reset > /dev/null
-curl -s -X DELETE http://localhost:5005/api/orders/reset > /dev/null
-
-k6 run --env MODE=choreography --env RATE=10 --env DURATION=60s \
-  --summary-trend-stats="avg,min,med,max,p(90),p(95),p(99)" \
-  benchmark-saga-steps.js
-```
-
-### Output
-
-- `results/steps_<mode>_<rate>rps.json` — canonical (overwritten per rate)
-- `results/steps_<mode>_<rate>rps_<timestamp>.json` — history preserved
 
 ### Recommended rates to test
 
@@ -307,10 +342,15 @@ k6 run --env MODE=choreography --env RATE=10 --env DURATION=60s \
 | 25 req/s | Heavy load — look for degradation |
 | 100 req/s | Saturation — where does each pattern break first? |
 
+### Output
+
+- `results/steps_<mode>_<rate>rps.json` — canonical (overwritten per rate)
+- `results/steps_<mode>_<rate>rps_<timestamp>.json` — history preserved
+
 ### Suggested per-step thesis table
 
-| Step | Orchestration P95 (ms) | Choreography P95 (ms) | Δ |
-|------|------------------------|------------------------|---|
+| Step | Orchestration P95 (ms) | Choreography P95 (ms) | Delta |
+|------|------------------------|------------------------|-------|
 | Reserve Inventory | X | Y | X-Y |
 | Process Payment | X | Y | X-Y |
 | Arrange Shipping | X | Y | X-Y |
@@ -320,49 +360,61 @@ k6 run --env MODE=choreography --env RATE=10 --env DURATION=60s \
 
 ---
 
-## 8. Test B: Fire-and-forget Throughput
+## 9. Test B: Fire-and-forget Throughput
 
 **Purpose:** Measure HTTP response time at sustained rates *without* waiting for saga completion. Tests API-gateway intake throughput independently of the saga pipeline.
 
-**Script:** `order-load-test.js`
+Unlike Test A (which holds a connection for up to 30s while polling for saga completion), this test fires and forgets — measuring pure HTTP acceptance capacity.
+
+### Steps
 
 ```bash
 cd /Users/robertslipsnis/Desktop/Thesis/saga-comparison/tests/LoadTests
 
-# Multi-rate suite
-./run-benchmarks.sh orchestration
-./run-benchmarks.sh choreography
+# 1. Single run
+./run-test.sh load --env RATE=50 --env DURATION=30s
 
-# Or run both interactively (prompts to switch modes):
-./run-benchmarks.sh both
+# 2. Multi-rate suite (runs at 1, 5, 10, 25, 50, 100, 250, 500, 1000 rps)
+./run-benchmarks.sh orchestration
+
+# 3. Switch services to choreography, then:
+./run-benchmarks.sh choreography
 ```
 
-Rates tested: 1, 5, 10, 25, 50, 100, 250, 500, 1000 req/s (edit `RATES=(...)` in the script).
+### Output
+
+- `results/result_<mode>_<rate>rps.json`
 
 ---
 
-## 9. Test C: Full Benchmark Matrix
+## 10. Test C: Full Benchmark Matrix
 
 **Purpose:** Runs Test A (`benchmark-saga-steps.js`) at multiple rates automatically and aggregates all results into a single summary JSON.
 
+### Steps
+
 ```bash
 cd /Users/robertslipsnis/Desktop/Thesis/saga-comparison/tests/LoadTests
 
-# For orchestration (default rates: 1, 5, 10, 25)
+# 1. Run orchestration at default rates (1, 5, 10, 25)
 ./run-full-benchmark.sh orchestration
 
-# For choreography
-./run-full-benchmark.sh choreography 1 5 10 25 50 100 250 500
+# 2. Custom rates
+./run-full-benchmark.sh orchestration 1 5 10 25 50 100
 
-# Custom rates
-./run-full-benchmark.sh orchestration 1 5 10 25 50 100 250 500
+# 3. Switch services to choreography, then:
+./run-full-benchmark.sh choreography 1 5 10 25 50 100
 ```
 
-**Output:** `results/benchmark_orchestration_summary.json` — array of all rate results with percentiles.
+Each rate resets state automatically. 5-second cooldown between rates.
+
+### Output
+
+- `results/benchmark_<mode>_summary.json` — array of all rate results with percentiles
 
 ---
 
-## 10. Test D: Resource Scaling Test (CPU/IO Bottlenecks)
+## 11. Test D: Resource Scaling (CPU / IO Bottlenecks)
 
 **Purpose:** Prove whether performance is CPU-bound or IO-bound by running the same load test with different resource limits on Temporal/RabbitMQ.
 
@@ -375,7 +427,7 @@ cd /Users/robertslipsnis/Desktop/Thesis/saga-comparison/tests/LoadTests
 | `generous` | 2.0 cores | 1024MB | Well-provisioned |
 | `unlimited` | No limits | No limits | Maximum available |
 
-### Running the test
+### Steps
 
 ```bash
 cd /Users/robertslipsnis/Desktop/Thesis/saga-comparison/tests/LoadTests
@@ -383,16 +435,20 @@ cd /Users/robertslipsnis/Desktop/Thesis/saga-comparison/tests/LoadTests
 # 1. Run orchestration with constrained Temporal
 ./run-resource-scaling-test.sh orchestration constrained
 
-# 2. After that completes, run with generous Temporal
+# 2. Restart .NET services (the script only restarts Docker infrastructure)
+
+# 3. Run with generous Temporal
 ./run-resource-scaling-test.sh orchestration generous
 
-# 3. Compare choreography
+# 4. Restart .NET services again
+
+# 5. Switch services to choreography mode
+
+# 6. Repeat for choreography
 ./run-resource-scaling-test.sh choreography constrained
+# restart .NET services
 ./run-resource-scaling-test.sh choreography generous
 ```
-
-**IMPORTANT:** After each `run-resource-scaling-test.sh`, you must restart the .NET
-services manually (the script only restarts Docker infrastructure).
 
 ### What to look for
 
@@ -415,62 +471,66 @@ Saved to `results/resource-scaling/`:
 
 ---
 
-## 11. Test E: Inventory-Visibility Lag
+## 12. Test E: Inventory-Visibility Lag
 
 **Purpose:** Measure real eventual-consistency lag — how long after `POST /api/orders` does the reserved stock become readable via `GET /api/inventory/products`?
 
-**Script:** `benchmark-consistency-lag.js`
-
-Replaces the earlier test (which polled `Order.Status` for intermediate states that are never written to the DB and returned meaningless data). This version:
+This version:
 
 1. Snapshots `reservedQuantity` for the target product
 2. Posts an order
 3. Polls the inventory endpoint every 25 ms until `reservedQuantity` increases
-4. Also records `saga_completion_lag_ms` (POST → Order.Status = Completed)
+4. Also records `saga_completion_lag_ms` (POST -> Order.Status = Completed)
+
+### Steps
 
 ```bash
 cd /Users/robertslipsnis/Desktop/Thesis/saga-comparison/tests/LoadTests
 
-# Orchestration
-k6 run --env MODE=orchestration --env ITERATIONS=30 \
-  --summary-trend-stats="avg,min,med,max,p(90),p(95),p(99)" \
-  benchmark-consistency-lag.js
+# 1. Run for orchestration
+./run-test.sh consistency --env ITERATIONS=30
 
-# Choreography (switch services first)
-k6 run --env MODE=choreography --env ITERATIONS=30 \
-  --summary-trend-stats="avg,min,med,max,p(90),p(95),p(99)" \
-  benchmark-consistency-lag.js
+# 2. Switch services to choreography, then:
+./run-test.sh consistency --env ITERATIONS=30
 ```
 
-**What to look for:** the delta between `inventory_visibility_lag_ms` and `saga_completion_lag_ms` tells you how far "ahead" the inventory write lands relative to the final Order update. Choreography typically shows lower lag because stock is written directly by the InventoryService consumer.
+### What to look for
+
+The delta between `inventory_visibility_lag_ms` and `saga_completion_lag_ms` tells you how far "ahead" the inventory write lands relative to the final Order update. Choreography typically shows lower lag because stock is written directly by the InventoryService consumer.
+
+### Output
+
+- `results/consistency_<mode>.json`
 
 ---
 
-## 12. Test F: Race Condition / Concurrency
+## 13. Test F: Race Condition / Concurrency
 
 **Purpose:** 20 concurrent users try to buy the single-stock "Limited Edition Tablet". Exactly 1 must win. Validates optimistic concurrency on `Product.Version`.
 
-**Script:** `benchmark-race-condition.js`
+### Steps
 
 ```bash
 cd /Users/robertslipsnis/Desktop/Thesis/saga-comparison/tests/LoadTests
 
-# Orchestration
-k6 run --env MODE=orchestration --env VUS=20 benchmark-race-condition.js
+# 1. Run for orchestration
+./run-test.sh race --env VUS=20
 
-# Choreography
-k6 run --env MODE=choreography --env VUS=20 benchmark-race-condition.js
+# 2. Switch services to choreography, then:
+./run-test.sh race --env VUS=20
 ```
 
 The script prints a `PASS/FAIL` correctness verdict. `FAIL (N winners — oversell!)` with N > 1 means the concurrency control broke.
 
+### Output
+
+- `results/race_<mode>_<vus>vus.json`
+
 ---
 
-## 13. Test G: Idempotency
+## 14. Test G: Idempotency
 
 **Purpose:** Verify that the same `IdempotencyKey` on `POST /api/orders` returns the **same** `OrderId` on both requests — no duplicate saga, no double charge.
-
-**Script:** `benchmark-idempotency.js`
 
 The test asserts three checks per iteration:
 
@@ -480,156 +540,188 @@ The test asserts three checks per iteration:
 
 A hard k6 threshold (`duplicate_orders_created: count==0`) fails the test run on any regression.
 
-```bash
-cd /Users/robertslipsnis/Desktop/Thesis/saga-comparison/tests/LoadTests
-
-# Orchestration
-k6 run --env MODE=orchestration --env ITERATIONS=20 benchmark-idempotency.js
-
-# Choreography
-k6 run --env MODE=choreography --env ITERATIONS=20 benchmark-idempotency.js
-```
-
----
-
-## 14. Test H: Compensation / Failure Benchmark (100% forced fail)
-
-**Purpose:** Measure the Compensating→Failed window when every saga is forced to roll back. This isolates the raw compensation cost with matched retry configs.
-
-### Set 100% payment failure
-
-```bash
-curl -s -X POST http://localhost:5005/api/payments/failure-rate/100
-curl -s http://localhost:5005/api/payments/failure-rate  # verify
-```
-
-### Run
+### Steps
 
 ```bash
 cd /Users/robertslipsnis/Desktop/Thesis/saga-comparison/tests/LoadTests
 
-# Orchestration — every saga compensates
-k6 run --env MODE=orchestration_compensation --env RATE=5 --env DURATION=30s \
-  --summary-trend-stats="avg,min,med,max,p(90),p(95),p(99)" \
-  benchmark-saga-steps.js
+# 1. Run for orchestration
+./run-test.sh idempotency --env ITERATIONS=20
 
-# Choreography — switch services, then:
-k6 run --env MODE=choreography_compensation --env RATE=5 --env DURATION=30s \
-  --summary-trend-stats="avg,min,med,max,p(90),p(95),p(99)" \
-  benchmark-saga-steps.js
+# 2. Switch services to choreography, then:
+./run-test.sh idempotency --env ITERATIONS=20
 ```
 
-### Reset failure rate after testing
+### Output
 
-```bash
-curl -s -X POST http://localhost:5005/api/payments/failure-rate/0
-```
-
-Look at `compensationDurationMs` in the results — this is the Compensating→Failed window captured by polling `Order.Status`.
+- `results/idempotency_<mode>.json`
 
 ---
 
-## 15. Test I: Mixed Workload (realistic 10% fail)
+## 15. Test H: Mixed Workload
 
-**Purpose:** Run with a realistic 10% failure rate so happy-path and compensation-path percentiles are captured in the **same** run. More representative than pure 0%/100%.
+**Purpose:** Run with a configurable failure rate so happy-path and compensation-path percentiles are captured in the **same** run. The setup automatically configures the payment failure rate and the teardown resets it to 0.
 
-**Script:** `benchmark-mixed-workload.js` — automatically sets `failure-rate/10` in `setup()` and resets to 0 in `teardown()`.
+### Steps
+
+#### Realistic 10% failure rate
 
 ```bash
 cd /Users/robertslipsnis/Desktop/Thesis/saga-comparison/tests/LoadTests
 
-# Orchestration
-k6 run --env MODE=orchestration --env RATE=10 --env DURATION=60s \
-  --env FAIL_RATE_PCT=10 \
-  --summary-trend-stats="avg,min,med,max,p(90),p(95),p(99)" \
-  benchmark-mixed-workload.js
+# 1. Run for orchestration
+./run-test.sh mixed --env RATE=10 --env DURATION=60s --env FAIL_RATE_PCT=10
 
-# Choreography
-k6 run --env MODE=choreography --env RATE=10 --env DURATION=60s \
-  --env FAIL_RATE_PCT=10 \
-  --summary-trend-stats="avg,min,med,max,p(90),p(95),p(99)" \
-  benchmark-mixed-workload.js
+# 2. Switch services to choreography, then:
+./run-test.sh mixed --env RATE=10 --env DURATION=60s --env FAIL_RATE_PCT=10
 ```
 
-Report both `happyPathMs` and `compensationMs` percentiles side by side. Shows how the observed fail rate compares to the target (confirms the percentage is actually being hit).
+#### 100% forced failure (pure compensation timing)
+
+To isolate the raw compensation cost, set `FAIL_RATE_PCT=100`. Every saga is forced to compensate.
+
+```bash
+# 1. Run for orchestration
+./run-test.sh mixed --env RATE=5 --env DURATION=30s --env FAIL_RATE_PCT=100
+
+# 2. Switch services to choreography, then:
+./run-test.sh mixed --env RATE=5 --env DURATION=30s --env FAIL_RATE_PCT=100
+```
+
+### What to look for
+
+- `happyPathMs` vs `compensationSagaMs` — total saga time for each path
+- `compensationWindowMs` — the Compensating -> Failed window
+- `observedFailRatePercent` — confirms the target rate is actually being hit
+
+### Output
+
+- `results/mixed_<mode>_<rate>rps.json`
 
 ---
 
-## 16. Test J: Endurance / Sustained Load
+## 16. Test I: Compensation Correctness
+
+**Purpose:** Verify that compensation actually restores system state. Sets payment failure rate to 100%, places orders, and checks:
+
+1. **All orders reach "Failed"** — none stuck in Pending or Compensating
+2. **All inventory reservations are released** — reserved quantity returns to baseline
+3. **No dangling state** — all orders have a terminal status
+
+This is a correctness test, not a performance test. It answers: "Do both patterns properly clean up after themselves when things go wrong?"
+
+### Steps
+
+```bash
+cd /Users/robertslipsnis/Desktop/Thesis/saga-comparison/tests/LoadTests
+
+# 1. Run for orchestration
+./run-test.sh compensation --env ITERATIONS=10
+
+# 2. Switch services to choreography, then:
+./run-test.sh compensation --env ITERATIONS=10
+```
+
+### What to look for
+
+- `orders_stuck: count==0` in the threshold — test hard-fails if any order doesn't reach Failed
+- Teardown logs report PASS/FAIL for inventory and order state assertions
+- `compensation_total_ms` — time from order creation to Failed (for comparison between patterns)
+
+### Output
+
+- `results/compensation_<mode>.json`
+
+---
+
+## 17. Test J: Endurance / Sustained Load
 
 **Purpose:** Run at a fixed rate for 5+ minutes and look for P95 drift across the start/middle/end buckets. Surfaces queue backlog growth, Temporal history-table bloat, connection-pool exhaustion, and memory leaks that single-shot benchmarks miss.
 
-**Script:** `benchmark-endurance.js`
+### Steps
 
 ```bash
 cd /Users/robertslipsnis/Desktop/Thesis/saga-comparison/tests/LoadTests
 
-# Orchestration
-k6 run --env MODE=orchestration --env RATE=25 --env DURATION=5m \
-  --summary-trend-stats="avg,min,med,max,p(90),p(95),p(99)" \
-  benchmark-endurance.js
+# 1. Run for orchestration
+./run-test.sh endurance --env RATE=25 --env DURATION=5m
 
-# Choreography
-k6 run --env MODE=choreography --env RATE=25 --env DURATION=5m \
-  --summary-trend-stats="avg,min,med,max,p(90),p(95),p(99)" \
-  benchmark-endurance.js
+# 2. Switch services to choreography, then:
+./run-test.sh endurance --env RATE=25 --env DURATION=5m
 ```
 
-The script prints a `P95 drift (end − start)` number. < 500 ms drift → steady-state. Larger means degradation; open Grafana and check RabbitMQ queue depth / Temporal task-queue depth / service memory.
+### What to look for
+
+The script prints a `P95 drift (end - start)` number:
+- < 500 ms drift -> steady-state
+- Larger drift -> degradation; open Grafana and check RabbitMQ queue depth / Temporal task-queue depth / service memory
+
+### Output
+
+- `results/endurance_<mode>_<rate>rps.json`
 
 ---
 
-## 17. Test K: Concurrent-Customer Throughput
+## 18. Test K: Concurrent-Customer Throughput
 
 **Purpose:** Many VUs firing simultaneously with **disjoint products**, so there is no row-level contention. Isolates pure pipeline parallelism from the concurrency-control overhead that Test F (race condition) intentionally stresses.
 
-**Script:** `benchmark-concurrent-customers.js`
+### Steps
 
 ```bash
 cd /Users/robertslipsnis/Desktop/Thesis/saga-comparison/tests/LoadTests
 
-# Orchestration
-k6 run --env MODE=orchestration --env VUS=50 --env DURATION=30s \
-  --summary-trend-stats="avg,min,med,max,p(90),p(95),p(99)" \
-  benchmark-concurrent-customers.js
+# 1. Run for orchestration
+./run-test.sh concurrent --env VUS=50 --env DURATION=30s
 
-# Choreography
-k6 run --env MODE=choreography --env VUS=50 --env DURATION=30s \
-  --summary-trend-stats="avg,min,med,max,p(90),p(95),p(99)" \
-  benchmark-concurrent-customers.js
+# 2. Switch services to choreography, then:
+./run-test.sh concurrent --env VUS=50 --env DURATION=30s
 ```
+
+### What to look for
 
 Compare `effectiveThroughputPerSec` between modes, and against Test F (race condition) at the same VU count — the gap quantifies the cost of row-level contention in each pattern.
 
+### Output
+
+- `results/concurrent_<mode>_<vus>vus.json`
+
 ---
 
-## 18. Test L: Cold-Start Penalty
+## 19. Test L: Cold-Start Penalty
 
 **Purpose:** Measure the latency penalty on the first N requests after a fresh service restart. Captures Temporal worker activation, MassTransit queue binding, EF Core query-plan compilation, and .NET tiered JIT costs.
 
-**Script:** `benchmark-cold-start.js`
+> **Critical:** You must stop and restart the .NET services yourself before running. The script only measures; it doesn't restart anything.
 
-> **Critical:** you must stop + start the .NET services yourself before running. The script only measures; it doesn't restart anything.
+### Steps
 
 ```bash
-# 1. Stop all 6 .NET services (Ctrl+C in each terminal)
-# 2. Restart them in the same order as section 4.
-# 3. Wait ~5 seconds for listeners to open, then:
-
 cd /Users/robertslipsnis/Desktop/Thesis/saga-comparison/tests/LoadTests
-k6 run --env MODE=orchestration --env ITERATIONS=20 --env GAP_MS=500 \
-  benchmark-cold-start.js
 
-# Restart services again, switch to choreography, then:
-k6 run --env MODE=choreography --env ITERATIONS=20 --env GAP_MS=500 \
-  benchmark-cold-start.js
+# 1. Stop all 6 .NET services (Ctrl+C in each terminal)
+# 2. Restart them in the same order as section 4
+# 3. Wait ~5 seconds for listeners to open
+# 4. Run for orchestration:
+./run-test.sh cold-start --env ITERATIONS=20 --env GAP_MS=500
+
+# 5. Stop all .NET services again
+# 6. Switch to choreography mode and restart
+# 7. Wait ~5 seconds, then:
+./run-test.sh cold-start --env ITERATIONS=20 --env GAP_MS=500
 ```
+
+### What to look for
 
 The report prints per-request durations, warm-tail average, and an absolute `coldPenaltyMs`.
 
+### Output
+
+- `results/coldstart_<mode>.json`
+
 ---
 
-## 19. Monitoring Dashboards
+## 20. Monitoring Dashboards
 
 During any test, these dashboards are available:
 
@@ -645,7 +737,7 @@ During any test, these dashboards are available:
 ### Grafana: Resource Monitoring
 
 1. Open http://localhost:3001 (admin / admin)
-2. Go to Dashboards → Saga Comparison → **Resource Monitoring**
+2. Go to Dashboards -> Saga Comparison -> **Resource Monitoring**
 3. Panels: CPU Usage, Memory Usage, Network I/O, Disk I/O, CPU Throttling, Memory Limit vs Usage
 4. Set time range to "Last 15 minutes" during tests
 
@@ -664,7 +756,7 @@ rate(container_cpu_cfs_throttled_seconds_total{name="saga-temporal"}[30s])
 
 ---
 
-## 20. Collecting Results for Thesis
+## 21. Collecting Results for Thesis
 
 All test results are saved to `tests/LoadTests/results/`. Each script writes
 **two** files: a canonical name (overwritten per run) and a timestamped copy
@@ -672,22 +764,23 @@ All test results are saved to `tests/LoadTests/results/`. Each script writes
 
 ```
 results/
-├── steps_orchestration_1rps.json                           # Test A/C canonical
-├── steps_orchestration_1rps_2026-04-24T....json            # Test A timestamped
-├── steps_choreography_1rps.json
+├── steps_orchestration_10rps.json                          # Test A canonical
+├── steps_orchestration_10rps_2026-04-25T....json           # Test A timestamped
+├── steps_choreography_10rps.json
 ├── benchmark_orchestration_summary.json                    # Test C aggregate
 ├── benchmark_choreography_summary.json
-├── result_orchestration_10rps.json                         # Test B
-├── result_choreography_10rps.json
-├── consistency_orchestration.json                          # Test E (inventory-visibility lag)
+├── result_orchestration_50rps.json                         # Test B
+├── result_choreography_50rps.json
+├── consistency_orchestration.json                          # Test E
 ├── consistency_choreography.json
 ├── race_orchestration_20vus.json                           # Test F
 ├── race_choreography_20vus.json
 ├── idempotency_orchestration.json                          # Test G
 ├── idempotency_choreography.json
-├── steps_orchestration_compensation_5rps.json              # Test H (forced fail)
-├── mixed_orchestration_10rps.json                          # Test I
+├── mixed_orchestration_10rps.json                          # Test H
 ├── mixed_choreography_10rps.json
+├── compensation_orchestration.json                         # Test I
+├── compensation_choreography.json
 ├── endurance_orchestration_25rps.json                      # Test J
 ├── endurance_choreography_25rps.json
 ├── concurrent_orchestration_50vus.json                     # Test K
@@ -727,6 +820,7 @@ From each JSON result file, the important fields are:
 | Saga Duration P99 | X ms | Y ms |
 | Compensation P95 (100% fail) | X ms | Y ms |
 | Compensation P95 (10% fail, mixed) | X ms | Y ms |
+| Compensation Correctness | PASS | PASS |
 | Inventory-Visibility Lag P95 | X ms | Y ms |
 | Cold-Start Penalty | X ms | Y ms |
 | Endurance P95 drift (5 min) | X ms | Y ms |
@@ -735,7 +829,7 @@ From each JSON result file, the important fields are:
 
 ---
 
-## 21. Cleanup
+## 22. Cleanup
 
 ```bash
 # Stop all Docker containers
@@ -754,23 +848,62 @@ docker compose down -v
 
 For a full thesis-quality comparison, run these in order:
 
-```
- 1. docker compose up -d
- 2. Start all 6 .NET services (SagaMode=orchestration)
- 3. Smoke test: curl POST /api/orders/benchmark
- 4. Test A : benchmark-saga-steps at 1, 5, 10, 25 rps      ← primary data + per-step
- 5. Test E : benchmark-consistency-lag (inventory lag)
- 6. Test F : benchmark-race-condition (20 VUs)
- 7. Test G : benchmark-idempotency (20 iterations)
- 8. Test I : benchmark-mixed-workload at 10% fail-rate     ← realistic mix
- 9. Test J : benchmark-endurance at 25 rps × 5 min         ← drift check
-10. Test K : benchmark-concurrent-customers (50 VUs)       ← parallelism
-11. Test H : set failure-rate/100, benchmark-saga-steps    ← 100% compensation
-12. Reset failure-rate to 0
-13. Test L : stop+restart services, benchmark-cold-start   ← cold-start penalty
-14. Stop all .NET services
-15. Restart all 6 .NET services (SagaMode=choreography)
-16. Repeat steps 3–13 for choreography
-17. Test D : resource-scaling (constrained + generous, both modes)
-18. Collect results from tests/LoadTests/results/
+```bash
+# ── Setup ───────────────────────────────────────────────────────
+docker compose up -d                          # start infrastructure
+# Start all 6 .NET services (SagaMode=orchestration)
+# Smoke test:
+curl -s -X POST http://localhost:5005/api/orders/benchmark \
+  -H "Content-Type: application/json" \
+  -d '{"customerId":"11111111-1111-1111-1111-111111111111","items":[{"productId":"a1111111-1111-1111-1111-111111111111","quantity":1,"unitPrice":29.99}]}' | jq .
+
+# ── Orchestration tests ────────────────────────────────────────
+cd tests/LoadTests
+
+./run-test.sh steps        --env RATE=1 --env DURATION=30s       # Test A: baseline
+./run-test.sh steps        --env RATE=10 --env DURATION=60s      # Test A: moderate
+./run-test.sh steps        --env RATE=25 --env DURATION=60s      # Test A: heavy
+./run-test.sh load         --env RATE=50 --env DURATION=30s      # Test B: throughput
+./run-test.sh consistency  --env ITERATIONS=30                    # Test E: visibility lag
+./run-test.sh race         --env VUS=20                           # Test F: concurrency
+./run-test.sh idempotency  --env ITERATIONS=20                    # Test G: deduplication
+./run-test.sh mixed        --env RATE=10 --env FAIL_RATE_PCT=10   # Test H: 10% fail
+./run-test.sh mixed        --env RATE=5  --env FAIL_RATE_PCT=100  # Test H: 100% fail
+./run-test.sh compensation --env ITERATIONS=10                    # Test I: correctness
+./run-test.sh endurance    --env RATE=25 --env DURATION=5m        # Test J: drift
+./run-test.sh concurrent   --env VUS=50 --env DURATION=30s        # Test K: parallelism
+
+# Stop + restart all .NET services, then:
+./run-test.sh cold-start   --env ITERATIONS=20                    # Test L: warm-up
+
+# ── Switch to choreography ─────────────────────────────────────
+# Stop all .NET services
+# Change SagaMode to "choreography" (appsettings.json or env var)
+# Restart all 6 .NET services
+
+# ── Choreography tests (same commands) ─────────────────────────
+./run-test.sh steps        --env RATE=1 --env DURATION=30s
+./run-test.sh steps        --env RATE=10 --env DURATION=60s
+./run-test.sh steps        --env RATE=25 --env DURATION=60s
+./run-test.sh load         --env RATE=50 --env DURATION=30s
+./run-test.sh consistency  --env ITERATIONS=30
+./run-test.sh race         --env VUS=20
+./run-test.sh idempotency  --env ITERATIONS=20
+./run-test.sh mixed        --env RATE=10 --env FAIL_RATE_PCT=10
+./run-test.sh mixed        --env RATE=5  --env FAIL_RATE_PCT=100
+./run-test.sh compensation --env ITERATIONS=10
+./run-test.sh endurance    --env RATE=25 --env DURATION=5m
+./run-test.sh concurrent   --env VUS=50 --env DURATION=30s
+
+# Stop + restart all .NET services, then:
+./run-test.sh cold-start   --env ITERATIONS=20
+
+# ── Resource scaling (optional) ────────────────────────────────
+./run-resource-scaling-test.sh orchestration constrained
+./run-resource-scaling-test.sh orchestration generous
+./run-resource-scaling-test.sh choreography constrained
+./run-resource-scaling-test.sh choreography generous
+
+# ── Collect results ────────────────────────────────────────────
+ls tests/LoadTests/results/
 ```

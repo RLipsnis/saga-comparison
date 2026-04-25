@@ -51,6 +51,14 @@ export const options = {
   },
 };
 
+export function setup() {
+  http.post(`${BASE_URL}/api/inventory/reset`);
+  http.del(`${BASE_URL}/api/orders/reset`);
+  http.post(`${BASE_URL}/api/payments/failure-rate/0`);
+  sleep(2);
+  console.log('[setup] State reset complete (ensure services were freshly restarted!)');
+}
+
 export default function () {
   // __ITER is 0-indexed; shift to 1-indexed for human-friendly output.
   const index = (__ITER || 0) + 1;

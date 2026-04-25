@@ -52,6 +52,14 @@ export const options = {
   },
 };
 
+export function setup() {
+  http.post(`${BASE_URL}/api/inventory/reset`);
+  http.del(`${BASE_URL}/api/orders/reset`);
+  http.post(`${BASE_URL}/api/payments/failure-rate/0`);
+  sleep(2);
+  console.log('[setup] State reset complete');
+}
+
 function getReserved(productId) {
   const res = http.get(`${BASE_URL}/api/inventory/products`);
   if (res.status !== 200) return null;

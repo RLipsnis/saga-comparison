@@ -1,5 +1,5 @@
 import http from 'k6/http';
-import { check } from 'k6';
+import { check, sleep } from 'k6';
 import { uuidv4 } from 'https://jslib.k6.io/k6-utils/1.4.0/index.js';
 import { Trend, Counter } from 'k6/metrics';
 
@@ -76,6 +76,14 @@ function currentBucket() {
   if (elapsed < third)     return 'start';
   if (elapsed < 2 * third) return 'middle';
   return 'end';
+}
+
+export function setup() {
+  http.post(`${BASE_URL}/api/inventory/reset`);
+  http.del(`${BASE_URL}/api/orders/reset`);
+  http.post(`${BASE_URL}/api/payments/failure-rate/0`);
+  sleep(2);
+  console.log('[setup] State reset complete');
 }
 
 export default function () {

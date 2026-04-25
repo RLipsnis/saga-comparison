@@ -43,6 +43,14 @@ export const options = {
   },
 };
 
+export function setup() {
+  http.post(`${BASE_URL}/api/inventory/reset`);
+  http.del(`${BASE_URL}/api/orders/reset`);
+  http.post(`${BASE_URL}/api/payments/failure-rate/0`);
+  sleep(2);
+  console.log('[setup] State reset complete');
+}
+
 export default function () {
   const product = PRODUCTS[Math.floor(Math.random() * PRODUCTS.length)];
   const quantity = Math.floor(Math.random() * 3) + 1;

@@ -1,5 +1,5 @@
 import http from 'k6/http';
-import { check } from 'k6';
+import { check, sleep } from 'k6';
 import { uuidv4 } from 'https://jslib.k6.io/k6-utils/1.4.0/index.js';
 import { Trend, Counter } from 'k6/metrics';
 
@@ -73,12 +73,16 @@ export const options = {
 };
 
 export function setup() {
+  http.post(`${BASE_URL}/api/inventory/reset`);
+  http.del(`${BASE_URL}/api/orders/reset`);
+  sleep(2);
+
   // Flip payments to the target failure rate for the duration of this test.
   const res = http.post(`${BASE_URL}/api/payments/failure-rate/${FAIL_RATE_PCT}`);
   if (res.status !== 200) {
     throw new Error(`Failed to set payment failure rate: ${res.status} ${res.body}`);
   }
-  console.log(`[setup] PaymentService FailureRatePercent = ${FAIL_RATE_PCT}`);
+  console.log(`[setup] State reset complete, PaymentService FailureRatePercent = ${FAIL_RATE_PCT}`);
   return { originalRate: FAIL_RATE_PCT };
 }
 
