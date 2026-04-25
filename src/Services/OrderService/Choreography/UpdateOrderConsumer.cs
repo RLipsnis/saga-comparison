@@ -39,7 +39,10 @@ public class UpdateOrderOnCompleted : IConsumer<OrderCompleted>
         if (order is null || order.Status == OrderStatus.Completed) return;
 
         order.Status = OrderStatus.Completed;
-        order.CompletedAt = context.Message.CompletedAt;
+        // Use wall-clock time (not message timestamp) so the benchmark's
+        // updateStatus step measures actual consumer processing + delivery
+        // latency — comparable to orchestration's Temporal activity round-trip.
+        order.CompletedAt = DateTime.UtcNow;
         await _db.SaveChangesAsync();
 
         _logger.LogInformation("[Choreography] Order {OrderId} marked as Completed", order.Id);
@@ -89,7 +92,8 @@ public class UpdateOrderOnFailed : IConsumer<OrderFailed>
 
         order.Status = OrderStatus.Failed;
         order.FailureReason = context.Message.Reason;
-        order.CompletedAt = context.Message.FailedAt;
+        // Use wall-clock time — same rationale as UpdateOrderOnCompleted.
+        order.CompletedAt = DateTime.UtcNow;
         await _db.SaveChangesAsync();
 
         _logger.LogInformation("[Choreography] Order {OrderId} marked as Failed: {Reason}", order.Id, context.Message.Reason);

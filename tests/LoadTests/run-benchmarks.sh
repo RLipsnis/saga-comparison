@@ -35,7 +35,7 @@ run_test() {
         --env DURATION="$DURATION" \
         --env BASE_URL="$BASE_URL" \
         --env MODE="$mode" \
-        --summary-trend-stats="avg,min,med,max,p(90),p(95),p(99)" \
+        --summary-trend-stats="count,avg,min,med,max,p(90),p(95),p(99)" \
         "$SCRIPT_DIR/order-load-test.js" \
         2>&1 | tee "$SCRIPT_DIR/results/log_${mode}_${rate}rps.txt"
 

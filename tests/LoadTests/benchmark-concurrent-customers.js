@@ -97,7 +97,7 @@ export default function () {
 
 export function handleSummary(data) {
   function pctls(metric) {
-    if (!metric || !metric.values || !metric.values.count) return null;
+    if (!metric || !metric.values) return null;
     const v = metric.values;
     return {
       count: v.count,

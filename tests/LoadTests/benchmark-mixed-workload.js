@@ -133,7 +133,7 @@ export function handleSummary(data) {
     // k6 exposes submetrics as e.g. metrics['total_saga_duration_ms{outcome:happy}']
     const key  = tagFilter ? `${metric}{${tagFilter}}` : metric;
     const m    = data.metrics[key] || data.metrics[metric];
-    if (!m || !m.values || !m.values.count) return null;
+    if (!m || !m.values) return null;
     const v = m.values;
     return {
       count: v.count,

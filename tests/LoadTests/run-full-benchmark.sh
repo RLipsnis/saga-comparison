@@ -56,7 +56,7 @@ for rate in "${RATES[@]}"; do
     --env DURATION="$DURATION" \
     --env BASE_URL="$BASE_URL" \
     --env MODE="$MODE" \
-    --summary-trend-stats="avg,min,med,max,p(90),p(95),p(99)" \
+    --summary-trend-stats="count,avg,min,med,max,p(90),p(95),p(99)" \
     "$SCRIPT_DIR/benchmark-saga-steps.js"
 
   # Append to summary if result file exists

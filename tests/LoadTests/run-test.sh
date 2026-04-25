@@ -86,7 +86,7 @@ run_one() {
   k6 run \
     --env MODE="$MODE" \
     --env BASE_URL="$BASE_URL" \
-    --summary-trend-stats="avg,min,med,max,p(90),p(95),p(99)" \
+    --summary-trend-stats="count,avg,min,med,max,p(90),p(95),p(99)" \
     "$@" \
     "$SCRIPT_DIR/$script"
 

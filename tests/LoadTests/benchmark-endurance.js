@@ -121,7 +121,7 @@ export function handleSummary(data) {
   function pctls(metric, tag) {
     const key = tag ? `${metric}{${tag}}` : metric;
     const m   = data.metrics[key] || data.metrics[metric];
-    if (!m || !m.values || !m.values.count) return null;
+    if (!m || !m.values) return null;
     const v = m.values;
     return {
       count: v.count,
