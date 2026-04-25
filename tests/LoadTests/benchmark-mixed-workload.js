@@ -66,7 +66,8 @@ export const options = {
     },
   },
   thresholds: {
-    'total_saga_duration_ms{phase:main,outcome:happy}':        ['p(95)<10000'],
+    'total_saga_duration_ms{phase:main,outcome:happy}':          ['p(95)<10000'],
+    'total_saga_duration_ms{phase:main,outcome:compensation}':   ['p(95)<10000'],
     'compensation_duration_ms{phase:main,outcome:compensation}': ['p(95)<10000'],
   },
 };
@@ -140,8 +141,11 @@ export function handleSummary(data) {
     };
   }
 
-  const happy = pctls('total_saga_duration_ms',    'outcome:happy');
-  const comp  = pctls('compensation_duration_ms',  'outcome:compensation');
+  // Use the exact tag combination from the thresholds — k6 only creates
+  // submetric entries in data.metrics for tag combos referenced by thresholds.
+  const happy = pctls('total_saga_duration_ms',   'phase:main,outcome:happy');
+  const comp  = pctls('compensation_duration_ms', 'phase:main,outcome:compensation');
+  const sagaComp = pctls('total_saga_duration_ms','phase:main,outcome:compensation');
 
   const completed   = data.metrics.orders_completed   ? data.metrics.orders_completed.values.count   : 0;
   const compensated = data.metrics.orders_compensated ? data.metrics.orders_compensated.values.count : 0;
@@ -167,8 +171,11 @@ export function handleSummary(data) {
     '  Happy-path saga duration (ms):',
     fmtRow('total', happy),
     '',
-    '  Compensation-path duration (ms):',
-    fmtRow('compensation window', comp),
+    '  Compensation-path saga duration (ms):',
+    fmtRow('total', sagaComp),
+    '',
+    '  Compensation window (Compensating → Failed) (ms):',
+    fmtRow('window', comp),
     '',
     '═══════════════════════════════════════════════════════════════',
     '',
@@ -182,8 +189,9 @@ export function handleSummary(data) {
     targetFailRatePercent: FAIL_RATE_PCT,
     observedFailRatePercent: parseFloat(actualFailRate),
     totals: { completed, compensated, failed },
-    happyPathMs:    happy,
-    compensationMs: comp,
+    happyPathMs:          happy,
+    compensationSagaMs:   sagaComp,
+    compensationWindowMs: comp,
   };
 
   return {

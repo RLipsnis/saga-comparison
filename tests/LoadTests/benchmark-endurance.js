@@ -60,7 +60,13 @@ export const options = {
     },
   },
   thresholds: {
-    total_saga_duration_ms: ['p(95)<10000'],
+    // k6 only creates submetric entries in data.metrics when a threshold
+    // references the tag combination. These are needed so handleSummary can
+    // read per-bucket percentiles for the P95-drift calculation.
+    'total_saga_duration_ms':                 ['p(95)<10000'],
+    'total_saga_duration_ms{bucket:start}':   ['p(95)<15000'],
+    'total_saga_duration_ms{bucket:middle}':  ['p(95)<15000'],
+    'total_saga_duration_ms{bucket:end}':     ['p(95)<15000'],
   },
 };
 
