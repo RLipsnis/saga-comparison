@@ -177,6 +177,7 @@ public class OrderSagaStateMachine : MassTransitStateMachine<OrderSagaState>
                     ctx.Saga.CompletedAt = DateTime.UtcNow;
                     LogTransition(ctx, "SendingNotification", "Completed");
                 })
+                .Publish(ctx => new OrderCompleted(ctx.Saga.CorrelationId, DateTime.UtcNow))
                 .TransitionTo(Completed)
                 .Finalize()
         );

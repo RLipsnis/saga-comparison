@@ -13,8 +13,8 @@ namespace OrderService.Orchestration;
 public class OrderSagaWorkflow
 {
     // ── Activity retry configuration ──────────────────────────────────────
-    // For fair benchmarking against MassTransit (which has no retries by default),
-    // set MaximumAttempts = 1 below. For production-like behavior, use 3+.
+    // Matched to the MassTransit retry policy (3 total attempts: initial + 2 retries
+    // at 1s and 2s intervals) so both patterns handle transient failures identically.
     //
     // Normal activities: called during the happy path (reserve, pay, ship, notify)
     private static readonly ActivityOptions DefaultActivityOptions = new()
