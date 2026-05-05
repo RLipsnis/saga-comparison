@@ -18,11 +18,18 @@ builder.Services.AddDbContext<OrderDbContext>(options =>
 
 if (sagaMode == "orchestration")
 {
-    // Named HttpClients for downstream services (orchestration uses REST)
-    builder.Services.AddHttpClient("InventoryService", c => c.BaseAddress = new Uri("http://localhost:5011"));
-    builder.Services.AddHttpClient("PaymentService", c => c.BaseAddress = new Uri("http://localhost:5012"));
-    builder.Services.AddHttpClient("ShippingService", c => c.BaseAddress = new Uri("http://localhost:5013"));
-    builder.Services.AddHttpClient("NotificationService", c => c.BaseAddress = new Uri("http://localhost:5014"));
+    // Named HttpClients for downstream services (orchestration uses REST).
+    // URLs come from config so the bare-metal default (localhost) and the Docker
+    // override (Services__Inventory=http://inventory-service:5011 etc.) both work.
+    var inventoryUrl    = builder.Configuration["Services:Inventory"]    ?? "http://localhost:5011";
+    var paymentUrl      = builder.Configuration["Services:Payment"]      ?? "http://localhost:5012";
+    var shippingUrl     = builder.Configuration["Services:Shipping"]     ?? "http://localhost:5013";
+    var notificationUrl = builder.Configuration["Services:Notification"] ?? "http://localhost:5014";
+
+    builder.Services.AddHttpClient("InventoryService",    c => c.BaseAddress = new Uri(inventoryUrl));
+    builder.Services.AddHttpClient("PaymentService",      c => c.BaseAddress = new Uri(paymentUrl));
+    builder.Services.AddHttpClient("ShippingService",     c => c.BaseAddress = new Uri(shippingUrl));
+    builder.Services.AddHttpClient("NotificationService", c => c.BaseAddress = new Uri(notificationUrl));
 
     // Temporal client + worker
     var temporalHost = builder.Configuration["Temporal:Host"] ?? "localhost:7233";
@@ -59,10 +66,15 @@ else if (sagaMode == "choreography")
 
         x.UsingRabbitMq((ctx, cfg) =>
         {
-            cfg.Host("localhost", "/", h =>
+            // Host/credentials come from config so Docker can override
+            // (RabbitMQ__Host=rabbitmq) while bare-metal keeps its localhost default.
+            var rmqHost = builder.Configuration["RabbitMQ:Host"]     ?? "localhost";
+            var rmqUser = builder.Configuration["RabbitMQ:User"]     ?? "saga";
+            var rmqPass = builder.Configuration["RabbitMQ:Password"] ?? "saga_dev";
+            cfg.Host(rmqHost, "/", h =>
             {
-                h.Username("saga");
-                h.Password("saga_dev");
+                h.Username(rmqUser);
+                h.Password(rmqPass);
             });
 
             // Retry policy to match Temporal's 3 attempts with exponential backoff

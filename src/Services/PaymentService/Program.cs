@@ -23,10 +23,15 @@ if (sagaMode == "choreography")
 
         x.UsingRabbitMq((ctx, cfg) =>
         {
-            cfg.Host("localhost", "/", h =>
+            // Host/credentials come from config so Docker can override
+            // (RabbitMQ__Host=rabbitmq) while bare-metal keeps its localhost default.
+            var rmqHost = builder.Configuration["RabbitMQ:Host"]     ?? "localhost";
+            var rmqUser = builder.Configuration["RabbitMQ:User"]     ?? "saga";
+            var rmqPass = builder.Configuration["RabbitMQ:Password"] ?? "saga_dev";
+            cfg.Host(rmqHost, "/", h =>
             {
-                h.Username("saga");
-                h.Password("saga_dev");
+                h.Username(rmqUser);
+                h.Password(rmqPass);
             });
 
             // Retry policy to match Temporal's 3 attempts with exponential backoff

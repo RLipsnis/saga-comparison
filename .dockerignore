@@ -1,0 +1,22 @@
+# Excluded from every Docker build context (build context = repo root).
+# Keeping the build slim improves cache hit rate.
+
+**/bin/
+**/obj/
+**/node_modules/
+**/.vs/
+**/.idea/
+**/.git/
+**/.vscode/
+**/results/
+**/dist/
+
+# Frontend artifacts — not needed for any backend container.
+src/Frontend/
+
+# Test artifacts
+tests/LoadTests/results/
+
+# Local files
+*.log
+.DS_Store

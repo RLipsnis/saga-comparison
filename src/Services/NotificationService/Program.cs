@@ -22,10 +22,15 @@ if (sagaMode == "choreography")
 
         x.UsingRabbitMq((ctx, cfg) =>
         {
-            cfg.Host("localhost", "/", h =>
+            // Host/credentials come from config so Docker can override
+            // (RabbitMQ__Host=rabbitmq) while bare-metal keeps its localhost default.
+            var rmqHost = builder.Configuration["RabbitMQ:Host"]     ?? "localhost";
+            var rmqUser = builder.Configuration["RabbitMQ:User"]     ?? "saga";
+            var rmqPass = builder.Configuration["RabbitMQ:Password"] ?? "saga_dev";
+            cfg.Host(rmqHost, "/", h =>
             {
-                h.Username("saga");
-                h.Password("saga_dev");
+                h.Username(rmqUser);
+                h.Password(rmqPass);
             });
 
             // Retry policy to match Temporal's 3 attempts with exponential backoff
@@ -45,5 +50,17 @@ using (var scope = app.Services.CreateScope())
 
 app.MapControllers();
 app.MapGet("/health", () => Results.Ok(new { Status = "OK", SagaMode = sagaMode }));
+
+// Runtime-configurable failure rate. Used by Test M (rollback-failure) to inject
+// failures during the saga's failure-notification step.
+app.MapGet("/api/notifications/failure-rate", () =>
+    Results.Ok(new { failureRatePercent = NotificationService.Domain.NotificationOperations.FailureRatePercent }));
+
+app.MapPost("/api/notifications/failure-rate/{rate:int}", (int rate) =>
+{
+    rate = Math.Clamp(rate, 0, 100);
+    NotificationService.Domain.NotificationOperations.FailureRatePercent = rate;
+    return Results.Ok(new { failureRatePercent = rate });
+});
 
 app.Run();

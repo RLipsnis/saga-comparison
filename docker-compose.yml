@@ -1,5 +1,3 @@
-version: "3.8"
-
 services:
   postgres:
     image: postgres:16-alpine
@@ -101,6 +99,187 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - /sys:/sys:ro
       - /var/lib/docker/:/var/lib/docker:ro
+
+  # ──────────────────────────────────────────────────────────────────────────
+  #  .NET services
+  #
+  #  Common pattern: each service is built from the same Dockerfile,
+  #  parameterised by PROJECT_PATH + DLL_NAME. SagaMode is set per-container
+  #  via the SAGA_MODE env var so flipping orchestration ↔ choreography just
+  #  requires `SAGA_MODE=choreography docker compose up -d`.
+  # ──────────────────────────────────────────────────────────────────────────
+
+  order-service:
+    build:
+      context: .
+      dockerfile: infrastructure/dotnet/Dockerfile
+      args:
+        PROJECT_PATH: src/Services/OrderService/OrderService.csproj
+        DLL_NAME: OrderService.dll
+    container_name: saga-order-service
+    environment:
+      ASPNETCORE_URLS: "http://+:5010"
+      SagaMode: "${SAGA_MODE:-orchestration}"
+      ConnectionStrings__DefaultConnection: "Host=postgres;Port=5432;Database=sagadb;Username=saga;Password=saga_dev"
+      Temporal__Host: "temporal:7233"
+      RabbitMQ__Host: "rabbitmq"
+      Services__Inventory:    "http://inventory-service:5011"
+      Services__Payment:      "http://payment-service:5012"
+      Services__Shipping:     "http://shipping-service:5013"
+      Services__Notification: "http://notification-service:5014"
+    ports:
+      - "5010:5010"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      temporal:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:5010/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 20s
+
+  inventory-service:
+    build:
+      context: .
+      dockerfile: infrastructure/dotnet/Dockerfile
+      args:
+        PROJECT_PATH: src/Services/InventoryService/InventoryService.csproj
+        DLL_NAME: InventoryService.dll
+    container_name: saga-inventory-service
+    environment:
+      ASPNETCORE_URLS: "http://+:5011"
+      SagaMode: "${SAGA_MODE:-orchestration}"
+      ConnectionStrings__DefaultConnection: "Host=postgres;Port=5432;Database=sagadb;Username=saga;Password=saga_dev"
+      RabbitMQ__Host: "rabbitmq"
+    ports:
+      - "5011:5011"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:5011/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 20s
+
+  payment-service:
+    build:
+      context: .
+      dockerfile: infrastructure/dotnet/Dockerfile
+      args:
+        PROJECT_PATH: src/Services/PaymentService/PaymentService.csproj
+        DLL_NAME: PaymentService.dll
+    container_name: saga-payment-service
+    environment:
+      ASPNETCORE_URLS: "http://+:5012"
+      SagaMode: "${SAGA_MODE:-orchestration}"
+      ConnectionStrings__DefaultConnection: "Host=postgres;Port=5432;Database=sagadb;Username=saga;Password=saga_dev"
+      RabbitMQ__Host: "rabbitmq"
+    ports:
+      - "5012:5012"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:5012/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 20s
+
+  shipping-service:
+    build:
+      context: .
+      dockerfile: infrastructure/dotnet/Dockerfile
+      args:
+        PROJECT_PATH: src/Services/ShippingService/ShippingService.csproj
+        DLL_NAME: ShippingService.dll
+    container_name: saga-shipping-service
+    environment:
+      ASPNETCORE_URLS: "http://+:5013"
+      SagaMode: "${SAGA_MODE:-orchestration}"
+      ConnectionStrings__DefaultConnection: "Host=postgres;Port=5432;Database=sagadb;Username=saga;Password=saga_dev"
+      RabbitMQ__Host: "rabbitmq"
+    ports:
+      - "5013:5013"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:5013/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 20s
+
+  notification-service:
+    build:
+      context: .
+      dockerfile: infrastructure/dotnet/Dockerfile
+      args:
+        PROJECT_PATH: src/Services/NotificationService/NotificationService.csproj
+        DLL_NAME: NotificationService.dll
+    container_name: saga-notification-service
+    environment:
+      ASPNETCORE_URLS: "http://+:5014"
+      SagaMode: "${SAGA_MODE:-orchestration}"
+      ConnectionStrings__DefaultConnection: "Host=postgres;Port=5432;Database=sagadb;Username=saga;Password=saga_dev"
+      RabbitMQ__Host: "rabbitmq"
+    ports:
+      - "5014:5014"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:5014/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 20s
+
+  api-gateway:
+    build:
+      context: .
+      dockerfile: infrastructure/dotnet/Dockerfile
+      args:
+        PROJECT_PATH: src/ApiGateway/ApiGateway.csproj
+        DLL_NAME: ApiGateway.dll
+    container_name: saga-api-gateway
+    environment:
+      # Loads appsettings.Docker.json which points YARP at the container
+      # hostnames. We can't override the YARP cluster URLs via env vars because
+      # the keys contain hyphens (orders-cluster) — POSIX env var names cannot
+      # contain hyphens, so the variables get silently dropped at container
+      # start. appsettings.Docker.json is the supported workaround.
+      ASPNETCORE_ENVIRONMENT: "Docker"
+      ASPNETCORE_URLS: "http://+:5005"
+    ports:
+      - "5005:5005"
+    depends_on:
+      order-service:
+        condition: service_healthy
+      inventory-service:
+        condition: service_healthy
+      payment-service:
+        condition: service_healthy
+      shipping-service:
+        condition: service_healthy
+      notification-service:
+        condition: service_healthy
 
 volumes:
   pgdata:
