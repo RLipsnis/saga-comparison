@@ -27,18 +27,26 @@ import { Trend, Counter } from 'k6/metrics';
 // The script does NOT restart services for you — it can only measure what's
 // running. If you forget to restart, you'll see flat "warm" timings.
 
-const requestDuration = new Trend('cold_request_duration_ms', true);
-const requestsOk      = new Counter('requests_ok');
-const requestsFailed  = new Counter('requests_failed');
-
 const BASE_URL   = __ENV.BASE_URL   || 'http://localhost:5005';
 const MODE       = __ENV.MODE       || 'unknown';
 const ITERATIONS = __ENV.ITERATIONS ? parseInt(__ENV.ITERATIONS) : 20;
 const GAP_MS     = __ENV.GAP_MS     ? parseInt(__ENV.GAP_MS)     : 500;
 const RESULT_STAMP = new Date().toISOString().replace(/[:.]/g, '-');
 
-// Collect per-index durations in a shared array so we can print the full curve.
-const perIndexDurations = [];
+// One Trend per iteration index. We cannot use a shared module-level array
+// because k6 runs handleSummary() in a JS runtime SEPARATE from the VU
+// iterations, so any state pushed during default() is invisible there. The
+// only state that crosses that boundary is data.metrics — hence one metric
+// per iteration. Each Trend is added to exactly once (vus: 1, one iteration
+// per index), so values.avg equals that single sample.
+const perIndexTrend = [];
+for (let i = 1; i <= ITERATIONS; i++) {
+  const id = String(i).padStart(2, '0');
+  perIndexTrend.push(new Trend(`cold_request_${id}_ms`, true));
+}
+
+const requestsOk     = new Counter('requests_ok');
+const requestsFailed = new Counter('requests_failed');
 
 export const options = {
   scenarios: {
@@ -76,8 +84,7 @@ export default function () {
   const duration = Date.now() - start;
 
   const ok = check(res, { 'status is 200': (r) => r.status === 200 });
-  requestDuration.add(duration, { index: String(index) });
-  perIndexDurations.push({ index, durationMs: duration, ok });
+  perIndexTrend[index - 1].add(duration);
 
   if (ok) {
     requestsOk.add(1);
@@ -91,18 +98,26 @@ export default function () {
 }
 
 export function handleSummary(data) {
-  // Sort by index in case iterations completed out-of-order (shouldn't with vus=1).
-  perIndexDurations.sort((a, b) => a.index - b.index);
+  // Reconstruct per-index durations from data.metrics — the only state that
+  // survives the VU -> handleSummary runtime boundary in k6.
+  const perRequestMs = [];
+  for (let i = 1; i <= ITERATIONS; i++) {
+    const key = `cold_request_${String(i).padStart(2, '0')}_ms`;
+    const m = data.metrics[key];
+    if (m && m.values && m.values.count > 0) {
+      perRequestMs.push({ index: i, durationMs: Math.round(m.values.avg) });
+    }
+  }
 
-  const firstReq = perIndexDurations[0];
-  const tailHalf = perIndexDurations.slice(Math.ceil(perIndexDurations.length / 2));
+  const firstReq = perRequestMs[0];
+  const tailHalf = perRequestMs.slice(Math.ceil(perRequestMs.length / 2));
   const warmAvg  = tailHalf.length
     ? tailHalf.reduce((s, r) => s + r.durationMs, 0) / tailHalf.length
     : 0;
   const coldPenalty = firstReq ? (firstReq.durationMs - warmAvg) : 0;
 
-  const table = perIndexDurations.map(r =>
-    `    #${String(r.index).padStart(2, ' ')}  ${String(r.durationMs).padStart(6, ' ')} ms  ${r.ok ? '' : 'FAIL'}`
+  const table = perRequestMs.map(r =>
+    `    #${String(r.index).padStart(2, ' ')}  ${String(r.durationMs).padStart(6, ' ')} ms`
   ).join('\n');
 
   const summary = [
@@ -128,7 +143,7 @@ export function handleSummary(data) {
     test: 'cold_start',
     iterations: ITERATIONS,
     gapMs: GAP_MS,
-    perRequestMs: perIndexDurations,
+    perRequestMs: perRequestMs,
     firstRequestMs: firstReq ? firstReq.durationMs : null,
     warmTailAvgMs:  Math.round(warmAvg),
     coldPenaltyMs:  Math.round(coldPenalty),

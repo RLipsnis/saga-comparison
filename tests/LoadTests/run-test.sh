@@ -22,6 +22,7 @@
 #   mixed         — Realistic happy + compensation mix
 #   cold-start    — Post-restart warm-up penalty
 #   compensation  — Compensation correctness verification
+#   rollback-failure — Failure DURING rollback (lecturer's scenario, Test M)
 #   all           — Run all tests above sequentially
 #
 # Each test resets database state automatically via setup().
@@ -63,9 +64,10 @@ resolve_script() {
     mixed)         echo "benchmark-mixed-workload.js" ;;
     cold-start)    echo "benchmark-cold-start.js" ;;
     compensation)  echo "benchmark-compensation-correctness.js" ;;
+    rollback-failure) echo "benchmark-rollback-failure.js" ;;
     *)
       echo "Unknown test: $1" >&2
-      echo "Available: steps load consistency idempotency race concurrent endurance mixed cold-start compensation all" >&2
+      echo "Available: steps load consistency idempotency race concurrent endurance mixed cold-start compensation rollback-failure all" >&2
       exit 1
       ;;
   esac
