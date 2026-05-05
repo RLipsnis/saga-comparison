@@ -35,7 +35,7 @@ echo "[" > "$SUMMARY_FILE"
 FIRST=true
 
 echo "============================================"
-echo "  Full Benchmark — ${MODE^^}"
+echo "  Full Benchmark — $(echo "$MODE" | tr '[:lower:]' '[:upper:]')"
 echo "  Rates: ${RATES[*]}"
 echo "  Duration per test: $DURATION"
 echo "============================================"
