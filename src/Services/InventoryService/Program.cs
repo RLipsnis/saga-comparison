@@ -23,10 +23,15 @@ if (sagaMode == "choreography")
 
         x.UsingRabbitMq((ctx, cfg) =>
         {
-            cfg.Host("localhost", "/", h =>
+            // Host/credentials come from config so Docker can override
+            // (RabbitMQ__Host=rabbitmq) while bare-metal keeps its localhost default.
+            var rmqHost = builder.Configuration["RabbitMQ:Host"]     ?? "localhost";
+            var rmqUser = builder.Configuration["RabbitMQ:User"]     ?? "saga";
+            var rmqPass = builder.Configuration["RabbitMQ:Password"] ?? "saga_dev";
+            cfg.Host(rmqHost, "/", h =>
             {
-                h.Username("saga");
-                h.Password("saga_dev");
+                h.Username(rmqUser);
+                h.Password(rmqPass);
             });
 
             // Retry policy to match Temporal's 3 attempts with exponential backoff
@@ -47,5 +52,19 @@ using (var scope = app.Services.CreateScope())
 
 app.MapControllers();
 app.MapGet("/health", () => Results.Ok(new { Status = "OK", SagaMode = sagaMode }));
+
+// Runtime-configurable failure rate for the COMPENSATION operation (Release).
+// Used by Test M (rollback-failure) to inject failures DURING the saga rollback.
+// Reserve is unaffected, so the saga still reaches the compensation step before
+// hitting the simulated failure.
+app.MapGet("/api/inventory/release-failure-rate", () =>
+    Results.Ok(new { releaseFailureRatePercent = InventoryService.Domain.InventoryOperations.ReleaseFailureRatePercent }));
+
+app.MapPost("/api/inventory/release-failure-rate/{rate:int}", (int rate) =>
+{
+    rate = Math.Clamp(rate, 0, 100);
+    InventoryService.Domain.InventoryOperations.ReleaseFailureRatePercent = rate;
+    return Results.Ok(new { releaseFailureRatePercent = rate });
+});
 
 app.Run();

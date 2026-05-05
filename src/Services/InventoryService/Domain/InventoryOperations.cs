@@ -10,6 +10,17 @@ public record ReleaseResult(bool Success, InventoryReleased? Event);
 
 public static class InventoryOperations
 {
+    private static readonly Random Rng = new();
+
+    // Failure-injection toggle for the COMPENSATION step only.
+    // ReserveAsync is unaffected — set to 100 to make the happy path reach the
+    // compensation phase, then have ReleaseAsync fail. Used by Test M
+    // (rollback-failure) to reproduce the lecturer's scenario:
+    //   "rollback starts → during rollback Inventory service fail → does the
+    //   system recover or stay inconsistent?"
+    // Default is 0 so all other benchmarks are unaffected.
+    public static int ReleaseFailureRatePercent { get; set; } = 0;
+
     public static async Task<ReserveResult> ReserveAsync(InventoryDbContext db, ReserveInventory command)
     {
         var cached = await IdempotencyHelper.CheckAsync<InventoryReserved>(db, command.OrderId, "ReserveInventory");
@@ -47,6 +58,12 @@ public static class InventoryOperations
 
     public static async Task<ReleaseResult> ReleaseAsync(InventoryDbContext db, ReleaseInventory command)
     {
+        // Throw BEFORE the idempotency check so a permanently-failing Release does
+        // not poison the idempotency cache. On retry (after rate is set back to 0)
+        // the operation runs fresh and can succeed.
+        if (ReleaseFailureRatePercent > 0 && Rng.Next(100) < ReleaseFailureRatePercent)
+            throw new InvalidOperationException("Simulated InventoryService.Release failure (rollback-failure test)");
+
         var cached = await IdempotencyHelper.CheckAsync<InventoryReleased>(db, command.OrderId, "ReleaseInventory");
         if (cached is not null)
             return new ReleaseResult(true, cached);
