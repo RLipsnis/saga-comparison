@@ -6,7 +6,23 @@ using Shared.Contracts;
 
 namespace OrderService.Choreography;
 
-public class UpdateOrderOnCompleted : IConsumer<NotificationSent>
+// Order.Status consumers for the choreography pattern.
+//
+// Each consumer reacts to a SINGLE business-level event emitted by the state machine
+// (OrderCompleted / OrderCompensating / OrderFailed). This replaces the earlier design
+// where four consumers listened to intermediate step-failure events in parallel with the
+// saga state machine — which caused Order.Status to flip to "Failed" before compensation
+// had a chance to run, making the failure path non-comparable with the Temporal catch
+// block (which only writes "Failed" AFTER compensation).
+//
+// Note (dual-write): the Publish() calls in the state machine happen inside the saga DB
+// transaction. If RabbitMQ is unreachable after the state commits, the Order.Status
+// consumer never fires and the Order row stays "Pending" until an operator intervenes.
+// Temporal avoids this by durably owning workflow state. For a stronger guarantee here
+// we'd configure MassTransit's transactional outbox — intentionally left out to keep the
+// broker footprint comparable to a vanilla choreography deployment.
+
+public class UpdateOrderOnCompleted : IConsumer<OrderCompleted>
 {
     private readonly OrderDbContext _db;
     private readonly ILogger<UpdateOrderOnCompleted> _logger;
@@ -17,12 +33,15 @@ public class UpdateOrderOnCompleted : IConsumer<NotificationSent>
         _logger = logger;
     }
 
-    public async Task Consume(ConsumeContext<NotificationSent> context)
+    public async Task Consume(ConsumeContext<OrderCompleted> context)
     {
         var order = await _db.Orders.FirstOrDefaultAsync(o => o.Id == context.Message.OrderId);
         if (order is null || order.Status == OrderStatus.Completed) return;
 
         order.Status = OrderStatus.Completed;
+        // Use wall-clock time (not message timestamp) so the benchmark's
+        // updateStatus step measures actual consumer processing + delivery
+        // latency — comparable to orchestration's Temporal activity round-trip.
         order.CompletedAt = DateTime.UtcNow;
         await _db.SaveChangesAsync();
 
@@ -30,7 +49,32 @@ public class UpdateOrderOnCompleted : IConsumer<NotificationSent>
     }
 }
 
-public class UpdateOrderOnFailed : IConsumer<InventoryReservationFailed>
+public class UpdateOrderOnCompensating : IConsumer<OrderCompensating>
+{
+    private readonly OrderDbContext _db;
+    private readonly ILogger<UpdateOrderOnCompensating> _logger;
+
+    public UpdateOrderOnCompensating(OrderDbContext db, ILogger<UpdateOrderOnCompensating> logger)
+    {
+        _db = db;
+        _logger = logger;
+    }
+
+    public async Task Consume(ConsumeContext<OrderCompensating> context)
+    {
+        var order = await _db.Orders.FirstOrDefaultAsync(o => o.Id == context.Message.OrderId);
+        // Only advance forward from Pending/intermediate states. Never overwrite a terminal state.
+        if (order is null || order.Status is OrderStatus.Completed or OrderStatus.Failed or OrderStatus.Compensating) return;
+
+        order.Status = OrderStatus.Compensating;
+        order.FailureReason = context.Message.Reason;
+        await _db.SaveChangesAsync();
+
+        _logger.LogInformation("[Choreography] Order {OrderId} marked as Compensating: {Reason}", order.Id, context.Message.Reason);
+    }
+}
+
+public class UpdateOrderOnFailed : IConsumer<OrderFailed>
 {
     private readonly OrderDbContext _db;
     private readonly ILogger<UpdateOrderOnFailed> _logger;
@@ -41,66 +85,17 @@ public class UpdateOrderOnFailed : IConsumer<InventoryReservationFailed>
         _logger = logger;
     }
 
-    public async Task Consume(ConsumeContext<InventoryReservationFailed> context)
+    public async Task Consume(ConsumeContext<OrderFailed> context)
     {
         var order = await _db.Orders.FirstOrDefaultAsync(o => o.Id == context.Message.OrderId);
         if (order is null || order.Status == OrderStatus.Failed) return;
 
         order.Status = OrderStatus.Failed;
         order.FailureReason = context.Message.Reason;
+        // Use wall-clock time — same rationale as UpdateOrderOnCompleted.
         order.CompletedAt = DateTime.UtcNow;
         await _db.SaveChangesAsync();
 
         _logger.LogInformation("[Choreography] Order {OrderId} marked as Failed: {Reason}", order.Id, context.Message.Reason);
-    }
-}
-
-public class UpdateOrderOnPaymentFailed : IConsumer<PaymentFailed>
-{
-    private readonly OrderDbContext _db;
-    private readonly ILogger<UpdateOrderOnPaymentFailed> _logger;
-
-    public UpdateOrderOnPaymentFailed(OrderDbContext db, ILogger<UpdateOrderOnPaymentFailed> logger)
-    {
-        _db = db;
-        _logger = logger;
-    }
-
-    public async Task Consume(ConsumeContext<PaymentFailed> context)
-    {
-        var order = await _db.Orders.FirstOrDefaultAsync(o => o.Id == context.Message.OrderId);
-        if (order is null || order.Status == OrderStatus.Failed) return;
-
-        order.Status = OrderStatus.Failed;
-        order.FailureReason = context.Message.Reason;
-        order.CompletedAt = DateTime.UtcNow;
-        await _db.SaveChangesAsync();
-
-        _logger.LogInformation("[Choreography] Order {OrderId} marked as Failed (payment): {Reason}", order.Id, context.Message.Reason);
-    }
-}
-
-public class UpdateOrderOnShippingFailed : IConsumer<ShippingFailed>
-{
-    private readonly OrderDbContext _db;
-    private readonly ILogger<UpdateOrderOnShippingFailed> _logger;
-
-    public UpdateOrderOnShippingFailed(OrderDbContext db, ILogger<UpdateOrderOnShippingFailed> logger)
-    {
-        _db = db;
-        _logger = logger;
-    }
-
-    public async Task Consume(ConsumeContext<ShippingFailed> context)
-    {
-        var order = await _db.Orders.FirstOrDefaultAsync(o => o.Id == context.Message.OrderId);
-        if (order is null || order.Status == OrderStatus.Failed) return;
-
-        order.Status = OrderStatus.Failed;
-        order.FailureReason = context.Message.Reason;
-        order.CompletedAt = DateTime.UtcNow;
-        await _db.SaveChangesAsync();
-
-        _logger.LogInformation("[Choreography] Order {OrderId} marked as Failed (shipping): {Reason}", order.Id, context.Message.Reason);
     }
 }

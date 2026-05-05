@@ -16,6 +16,7 @@ const MODE = __ENV.MODE || 'unknown';
 const VUS = __ENV.VUS ? parseInt(__ENV.VUS) : 20;
 // Product with stock=1 (limited edition tablet)
 const RACE_PRODUCT = 'c1111111-1111-1111-1111-111111111111';
+const RESULT_STAMP = new Date().toISOString().replace(/[:.]/g, '-');
 
 export const options = {
   scenarios: {
@@ -78,16 +79,47 @@ export function teardown() {
 }
 
 export function handleSummary(data) {
+  const wins   = data.metrics.race_wins   ? data.metrics.race_wins.values.count   : 0;
+  const losses = data.metrics.race_losses ? data.metrics.race_losses.values.count : 0;
+  const resPct = data.metrics.race_response_ms ? data.metrics.race_response_ms.values : {};
+
+  const correctness = (wins === 1)
+    ? 'PASS (exactly 1 winner)'
+    : (wins === 0 ? 'FAIL (no winners — all rejected)' : `FAIL (${wins} winners — oversell!)`);
+
+  const summary = [
+    '',
+    '═══════════════════════════════════════════════════════════════',
+    `  RACE CONDITION — ${MODE.toUpperCase()}`,
+    `  Concurrent buyers: ${VUS}  |  Single-stock product: ${RACE_PRODUCT}`,
+    '═══════════════════════════════════════════════════════════════',
+    '',
+    `  Winners: ${wins}   Losers: ${losses}   Correctness: ${correctness}`,
+    '',
+    `  Response time (ms): avg=${(resPct.avg||0).toFixed(1)}  p95=${(resPct['p(95)']||0).toFixed(1)}  max=${(resPct.max||0).toFixed(1)}`,
+    '',
+    '═══════════════════════════════════════════════════════════════',
+    '',
+  ].join('\n');
+
+  const jsonResult = {
+    mode: MODE,
+    test: 'race_condition',
+    vus: VUS,
+    productId: RACE_PRODUCT,
+    wins,
+    losses,
+    correctness,
+    responseMs: {
+      avg: (resPct.avg || 0).toFixed(1),
+      p95: (resPct['p(95)'] || 0).toFixed(1),
+      max: (resPct.max || 0).toFixed(1),
+    },
+  };
+
   return {
-    stdout: JSON.stringify({
-      mode: MODE,
-      vus: VUS,
-      metrics: {
-        race_wins: data.metrics.race_wins,
-        race_losses: data.metrics.race_losses,
-        race_response_ms: data.metrics.race_response_ms,
-      },
-    }, null, 2),
-    [`results/race_${MODE}_${VUS}vus.json`]: JSON.stringify(data, null, 2),
+    stdout: summary,
+    [`results/race_${MODE}_${VUS}vus_${RESULT_STAMP}.json`]: JSON.stringify(jsonResult, null, 2),
+    [`results/race_${MODE}_${VUS}vus.json`]: JSON.stringify(jsonResult, null, 2),
   };
 }

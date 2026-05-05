@@ -12,7 +12,10 @@ public static class PaymentOperations
 {
     private static readonly Random Rng = new();
 
-    public static int FailureRatePercent { get; set; } = 5;
+    // Default is 0% so happy-path benchmarks (saga-step, step-duration, consistency-lag, etc.)
+    // are not contaminated by random failures. Test I sets this to 100 via POST
+    // /api/payments/failure-rate/100 to exercise the compensation path.
+    public static int FailureRatePercent { get; set; } = 0;
 
     public static async Task<ProcessResult> ProcessAsync(PaymentDbContext db, ProcessPayment command)
     {

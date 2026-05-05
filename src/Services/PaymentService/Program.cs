@@ -39,9 +39,11 @@ if (sagaMode == "choreography")
     });
 }
 
-// Initialize configurable failure rate from appsettings
+// Initialize configurable failure rate from appsettings.
+// Default is 0% so happy-path benchmarks run cleanly; Test I (compensation) sets
+// it to 100 at runtime via POST /api/payments/failure-rate/100.
 PaymentService.Domain.PaymentOperations.FailureRatePercent =
-    builder.Configuration.GetValue<int>("PaymentFailureRatePercent", 5);
+    builder.Configuration.GetValue<int>("PaymentFailureRatePercent", 0);
 
 var app = builder.Build();
 

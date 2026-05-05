@@ -150,7 +150,7 @@ k6 run \
   --env DURATION="$DURATION" \
   --env BASE_URL="$BASE_URL" \
   --env MODE="${MODE}_${PROFILE}" \
-  --summary-trend-stats="avg,min,med,max,p(90),p(95),p(99)" \
+  --summary-trend-stats="count,avg,min,med,max,p(90),p(95),p(99)" \
   "$SCRIPT_DIR/benchmark-saga-steps.js" \
   2>&1 | tee "$RESULTS_DIR/k6_log_${MODE}_${PROFILE}_${RATE}rps_${TIMESTAMP}.txt"
 

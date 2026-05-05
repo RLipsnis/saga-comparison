@@ -14,6 +14,7 @@ const orderSuccessRate = new Rate('order_success_rate');
 const RATE = __ENV.RATE ? parseInt(__ENV.RATE) : 1;           // orders per second
 const DURATION = __ENV.DURATION || '30s';                      // test duration
 const BASE_URL = __ENV.BASE_URL || 'http://localhost:5005';    // API Gateway
+const RESULT_STAMP = new Date().toISOString().replace(/[:.]/g, '-');
 
 // Products with plenty of stock for sustained load
 const PRODUCTS = [
@@ -41,6 +42,14 @@ export const options = {
     order_success_rate: ['rate>0.90'],
   },
 };
+
+export function setup() {
+  http.post(`${BASE_URL}/api/inventory/reset`);
+  http.del(`${BASE_URL}/api/orders/reset`);
+  http.post(`${BASE_URL}/api/payments/failure-rate/0`);
+  sleep(2);
+  console.log('[setup] State reset complete');
+}
 
 export default function () {
   const product = PRODUCTS[Math.floor(Math.random() * PRODUCTS.length)];
@@ -156,6 +165,7 @@ export function handleSummary(data) {
 
   return {
     stdout: summary,
+    [`results/result_${mode}_${rate}rps_${RESULT_STAMP}.json`]: JSON.stringify(jsonResult, null, 2),
     [`results/result_${mode}_${rate}rps.json`]: JSON.stringify(jsonResult, null, 2),
   };
 }

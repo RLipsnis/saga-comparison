@@ -6,11 +6,17 @@ using OrderService.Domain;
 using OrderService.Infrastructure;
 using OrderService.Orchestration;
 using Shared.Contracts;
+using Shared.Infrastructure;
 using Temporalio.Client;
 
 namespace OrderService.Api;
 
 public record CreateOrderRequest(Guid CustomerId, List<OrderItemDto> Items, Guid? IdempotencyKey);
+
+// Stored under IdempotencyRecord.ResultJson with OperationType="CreateOrder".
+// Lets the controller return the same OrderId for duplicate requests that share the
+// same IdempotencyKey, without adding a new column to the Orders table.
+internal record CreateOrderIdempotencyResult(Guid OrderId);
 
 [ApiController]
 [Route("api/orders")]
@@ -40,6 +46,22 @@ public class OrdersController : ControllerBase
     public async Task<IActionResult> Create([FromBody] CreateOrderRequest request)
     {
         var sagaMode = _configuration.GetValue<string>("SagaMode") ?? "orchestration";
+
+        // Order-level idempotency: if the client supplied an IdempotencyKey and we've already
+        // seen it, return the existing OrderId instead of creating a duplicate Order (and a
+        // duplicate downstream saga).
+        if (request.IdempotencyKey.HasValue)
+        {
+            var cached = await IdempotencyHelper.CheckAsync<CreateOrderIdempotencyResult>(
+                _db, request.IdempotencyKey.Value, "CreateOrder");
+            if (cached is not null)
+            {
+                _logger.LogInformation("Idempotent CreateOrder hit, key={Key} OrderId={OrderId}",
+                    request.IdempotencyKey.Value, cached.OrderId);
+                return Accepted(new { OrderId = cached.OrderId, Mode = sagaMode, Idempotent = true });
+            }
+        }
+
         var orderId = Guid.NewGuid();
         var idempotencyKey = request.IdempotencyKey ?? Guid.NewGuid();
 
@@ -54,7 +76,40 @@ public class OrdersController : ControllerBase
         };
 
         _db.Orders.Add(order);
-        await _db.SaveChangesAsync();
+
+        // Persist the idempotency record in the SAME transaction as the Order insert so a
+        // concurrent duplicate hits the unique index on (Key, OperationType) and can safely
+        // re-read the cached OrderId.
+        if (request.IdempotencyKey.HasValue)
+        {
+            _db.Set<IdempotencyRecord>().Add(new IdempotencyRecord
+            {
+                Id = Guid.NewGuid(),
+                Key = request.IdempotencyKey.Value,
+                OperationType = "CreateOrder",
+                ResultJson = JsonSerializer.Serialize(new CreateOrderIdempotencyResult(orderId)),
+                CreatedAt = DateTime.UtcNow
+            });
+        }
+
+        try
+        {
+            await _db.SaveChangesAsync();
+        }
+        catch (DbUpdateException) when (request.IdempotencyKey.HasValue)
+        {
+            // Another concurrent request won the race. Fetch its OrderId and return it.
+            _db.ChangeTracker.Clear();
+            var cached = await IdempotencyHelper.CheckAsync<CreateOrderIdempotencyResult>(
+                _db, request.IdempotencyKey.Value, "CreateOrder");
+            if (cached is not null)
+            {
+                _logger.LogInformation("Idempotent CreateOrder race resolved, key={Key} OrderId={OrderId}",
+                    request.IdempotencyKey.Value, cached.OrderId);
+                return Accepted(new { OrderId = cached.OrderId, Mode = sagaMode, Idempotent = true });
+            }
+            throw;
+        }
 
         if (sagaMode == "orchestration")
         {
@@ -223,14 +278,16 @@ public class OrdersController : ControllerBase
         }
         timestamps["sagaInitiated"] = DateTime.UtcNow;
 
-        // Poll until terminal state (max 30s)
+        // Poll until terminal state (max 30s).
+        // 25ms granularity keeps ±25ms jitter on Compensating→Failed and step transition
+        // measurements. Total budget is still 30s (1200 iterations × 25ms).
         var prevStatus = "Pending";
         var stepTimestamps = new Dictionary<string, DateTime>();
         var compensationStarted = false;
         DateTime? compensationStartTime = null;
-        for (var i = 0; i < 300; i++)
+        for (var i = 0; i < 1200; i++)
         {
-            await Task.Delay(100);
+            await Task.Delay(25);
             var current = await _db.Orders.AsNoTracking().FirstOrDefaultAsync(o => o.Id == orderId);
             if (current is null) break;
 
